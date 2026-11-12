@@ -6,6 +6,9 @@ plugins {
 version = "${project.mod_version}-fabric-${project.minecraft_version}"
 group = project.maven_group
 
+// 目标 Java 版本随 Minecraft 版本变化（26.2 -> 25，1.21.11 -> 21）。
+def targetJavaVersion = (project.findProperty("java_version") ?: "25").toString().toInteger()
+
 base {
     archivesName = project.archives_base_name
 }
@@ -23,6 +26,10 @@ loom {
 
 // 单元测试覆盖纯逻辑类（检测/预测/状态机/配置），不加载 Minecraft。
 sourceSets {
+    // 版本相关胶水代码；共享代码仍在 src/client/java。
+    client {
+        java.srcDir "src/versions/${project.minecraft_version}/java"
+    }
     test {
         compileClasspath += sourceSets.client.output
         runtimeClasspath += sourceSets.client.output
@@ -79,16 +86,17 @@ processResources {
     inputs.property "version", project.version
     inputs.property "minecraft_version", project.minecraft_version
     inputs.property "loader_version", project.loader_version
+    inputs.property "java_version", targetJavaVersion
     filteringCharset "UTF-8"
 
     filesMatching("fabric.mod.json") {
         expand "version": project.version,
                 "minecraft_version": project.minecraft_version,
-                "loader_version": project.loader_version
+                "loader_version": project.loader_version,
+                "java_version": targetJavaVersion
     }
 }
 
-def targetJavaVersion = 25
 tasks.withType(JavaCompile).configureEach {
     // ensure that the encoding is set to UTF-8, no matter what the system default is
     // this fixes some edge cases with special characters not displaying correctly
