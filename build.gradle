@@ -21,6 +21,14 @@ loom {
     }
 }
 
+// 单元测试覆盖纯逻辑类（检测/预测/状态机/配置），不加载 Minecraft。
+sourceSets {
+    test {
+        compileClasspath += sourceSets.client.output
+        runtimeClasspath += sourceSets.client.output
+    }
+}
+
 fabricApi {
     configureDataGeneration {
         client = true
@@ -28,11 +36,8 @@ fabricApi {
 }
 
 repositories {
-    // Add repositories to retrieve artifacts from in here.
-    // You should only use this when depending on other mods because
-    // Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
-    // See https://docs.gradle.org/current/userguide/declaring_repositories.html
-    // for more information about repositories.
+    // 单元测试依赖（JUnit）以及通用库
+    mavenCentral()
 
     // Modrinth Maven
     maven {
@@ -55,7 +60,20 @@ dependencies {
 
     // Mod Menu (optional but recommended)
     implementation "maven.modrinth:modmenu:${project.modmenu_version}"
+
+    // 单元测试
+    testImplementation platform("org.junit:junit-bom:5.11.4")
+    testImplementation "org.junit.jupiter:junit-jupiter"
+    testRuntimeOnly "org.junit.platform:junit-platform-launcher"
+    // 生产环境由 Minecraft 提供 Gson；测试需要显式依赖
+    testImplementation "com.google.code.gson:gson:2.11.0"
+    testImplementation "org.slf4j:slf4j-api:2.0.16"
 }
+
+tasks.named("test") {
+    useJUnitPlatform()
+}
+
 
 processResources {
     inputs.property "version", project.version

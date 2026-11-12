@@ -23,6 +23,9 @@
   
   "config.autofishing.logs.title": "最近20条钓鱼记录",
   "config.autofishing.logs.empty": "暂无记录",
+
+  "config.autofishing.curve.open": "打开 Bar %s 曲线编辑器",
+  "config.autofishing.curve.open.button": "打开曲线编辑器",
   
   "key.autofishing.toggle": "切换自动钓鱼",
   "key.category.autofishing.autofishing": "自动钓鱼",

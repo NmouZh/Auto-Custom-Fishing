@@ -14,24 +14,19 @@ If you are reading the code, treat it as a reference for the approach rather tha
 
 ## Current Known Issue
 
-The biggest problem with this project:
+The biggest problem with older versions:
 
-**It cannot reel in the rod instantly and reliably at the exact moment the correct Title/Subtitle message is received.**
+**It could not reel in the rod instantly and reliably at the exact moment the correct Title/Subtitle message was received.**
 
-In practice, the correct timing is theoretically detected, but there is still a slight delay when the click is actually executed. The cause of this delay has not been fully diagnosed, so the project uses a compromise approach instead:
+The old implementation split "detecting the right moment" and "clicking" across ticks: decoding happened on packet arrival, but the actual click waited for the next client tick (up to 50ms) — enough time for the pointer to leave the success zone on fast bars.
 
-- It does not directly rely on "click as soon as the correct title is seen"
-- Instead, it first calculates the bobber / pointer movement speed
-- Then predicts the future position based on the speed and reels in slightly early
+The current architecture fixes this:
 
-This approach covers most cases, but with clear side effects:
+- Click decision and execution happen in the same `Hud.setSubtitle` call stack; no tick queueing
+- Speed prediction and the advance curve are still kept as compensation for high-difficulty bars
+- Real-server behavior still needs in-game verification; if fish are still missed, tune the curve rather than adding delay
 
-- Fish are still occasionally missed
-- Some bars or some speeds require manually tuning the advance amount
-
-Therefore, the repository also includes an **advance curve editor tool**, specifically for adjusting the early-click amount per bar and per speed. The default parameters can catch most fish, but not 100%.
-
-If you know why "reeling in without delay after detecting the correct timing" cannot be achieved, or you can make this logic more reliable, feel free to open an Issue / PR.
+The repository still includes an **advance curve editor**, specifically for adjusting the early-click amount per bar and per speed. The default parameters can catch most fish, but not 100%. Issue / PR feedback from real gameplay is welcome.
 
 ## Introduction
 
@@ -67,13 +62,13 @@ This project does not use image recognition or screen reading. It directly analy
 
 The overall flow:
 
-1. `FishingHookMixin` listens to the local player's fishing hook entity `biting` state to detect a bite.
-2. `TitlePacketMixin` intercepts `Hud#setTitle`, `setSubtitle`, `setOverlayMessage` and passes the received text to `TitleAnalyzer`.
-3. `TitleAnalyzer` parses the custom font characters and offset characters used by Custom-Fishing from `Component.toString()`.
+1. `FishingHookMixin` listens to the local player's fishing hook `biting` state and reels in immediately on a bite.
+2. `HudMixin` intercepts `Hud#setTitle`, `setSubtitle`, `setOverlayMessage` and hands components to `ComponentScanner`.
+3. `ComponentScanner` splits components into "text + effective font" parts; `UiDecoder` extracts the Custom-Fishing bar glyphs and offset characters.
 4. The pointer progress is reverse-engineered from the offsets and mapped to logical grid positions on the current bar.
-5. Position changes over a recent window are recorded to calculate the average speed.
-6. The optimal click timing is calculated from the success zone of the current bar, the current speed, and the "advance curve" in the config.
-7. `FishingController` drives the whole flow with a small state machine: cast, wait for bite, enter minigame, click, reel in, recast.
+5. `PointerTracker` records recent position changes and estimates the average speed.
+6. `ClickPredictor` decides the click timing from the success zone, speed and the configured advance curve; the click runs in the same packet-handling call stack, with no tick queueing.
+7. `FishingController` drives the whole flow with a state machine: cast, wait for bite, enter minigame, click, reel in, recast.
 
 In short:
 
@@ -138,31 +133,57 @@ Default philosophy:
 ## Project Structure
 
 ```text
-src/main/java/com/autofishing/
-  AutoFishingMod.java                Mod entry point
+src/main/java/cafe/yamds/
+  AutoFishingMod.java                Common mod entry point
 
-src/client/java/com/autofishing/
-  AutoFishingClient.java             Client entry point
-  fishing/FishingController.java     Auto-fishing state machine
-  game/TitleAnalyzer.java            Custom-Fishing UI parser
-  game/GameState.java                Game state and speed measurement
-  mixin/FishingHookMixin.java        Fish bite detection
-  mixin/TitlePacketMixin.java        Title / Subtitle interception
-  config/AutoFishConfig.java         Config loading and saving
-  config/AutoFishConfigScreen.java   Config screen
-  config/CurveEditorScreen.java      Advance curve editor
-  config/FishingLog.java             Click log
+src/client/java/cafe/yamds/
+  AutoFishingClient.java             Client entry point (wiring only)
+  ModRuntime.java                    Runtime assembly and event forwarding
+  detection/
+    ComponentScanner.java            Component → text parts
+    UiDecoder.java                   Custom-Fishing protocol decoder (pure)
+    BarTable.java                    Bar metadata and success tables (single source of truth)
+    PointerTracker.java              Pointer speed estimation
+    FishingUiDetector.java           Latest frame and activity tracking
+  fishing/
+    FishingController.java           State machine (pure)
+    ClickPredictor.java              Click timing prediction (pure)
+    MinecraftFishingEnvironment.java Minecraft action glue
+    FishingLog.java                  Click log
+  config/
+    AutoFishConfig.java              Config data and validation
+    ConfigStore.java                 Load/save and curve cache
+    AdvanceCurve.java / CurvePoint.java
+  ui/
+    AutoFishConfigScreen.java        Cloth Config screen
+    CurveEditorScreen.java           Curve editor
+    BarVisualizer.java               Bar visualization
+    KeyBindings.java / ModMenuIntegration.java
+  mixin/
+    FishingHookMixin.java            Bite detection
+    HudMixin.java                    Title / Subtitle / ActionBar interception
+
+src/test/java/                       Pure JVM unit tests (no Minecraft)
 ```
+
+## Development and Testing
+
+```bash
+./gradlew build      # build
+./gradlew test       # run unit tests
+```
+
+Architecture rules, state diagram and extension guide: [AGENTS.md](AGENTS.md).
 
 ## Who Should Read This
 
 If you want to understand the code quickly, the most valuable classes to start with are:
 
-- `FishingController`
-- `TitleAnalyzer`
-- `GameState`
-- `FishingHookMixin`
-- `TitlePacketMixin`
+- `FishingController` (state machine)
+- `FishingUiDetector` / `UiDecoder` (protocol parsing and speed)
+- `ClickPredictor` (click timing)
+- `BarTable` (bar data)
+- `HudMixin` / `FishingHookMixin` (event entry points)
 
 These files basically cover the core behavior.
 
@@ -186,7 +207,7 @@ Build output is located at:
 
 - Only river fishing is automated so far
 - The logic heavily depends on Custom-Fishing's current title component structure and custom font offset rules
-- Cannot guarantee "instant, zero-delay reeling after detecting the correct timing"; it currently relies on speed prediction + advance compensation
+- Clicks now execute on packet arrival, but network/server processing still adds inherent latency; high-difficulty bars still rely on speed prediction + advance compensation
 - If the server plugin changes its UI encoding in the future, this mod may need to be updated accordingly
 - This is a highly customized project; compatibility with other fishing plugins is not guaranteed
 

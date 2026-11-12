@@ -1,14 +1,13 @@
-package cafe.yamds.config;
+package cafe.yamds.ui;
 
 import com.terraformersmc.modmenu.api.ConfigScreenFactory;
 import com.terraformersmc.modmenu.api.ModMenuApi;
 
 /**
- * Mod Menu集成
- * 允许从Mod Menu打开配置界面
+ * Mod Menu 集成：从 Mod Menu 打开配置界面。
  */
 public class ModMenuIntegration implements ModMenuApi {
-    
+
     @Override
     public ConfigScreenFactory<?> getModConfigScreenFactory() {
         return AutoFishConfigScreen::createConfigScreen;

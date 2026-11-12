@@ -2,293 +2,278 @@ package cafe.yamds.fishing;
 
 import cafe.yamds.AutoFishingMod;
 import cafe.yamds.config.AutoFishConfig;
-import cafe.yamds.config.FishingLog;
-import cafe.yamds.game.GameState;
-import cafe.yamds.game.TitleAnalyzer;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.player.LocalPlayer;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.InteractionHand;
+import cafe.yamds.config.CurveSource;
+import cafe.yamds.detection.FishingUiDetector;
+import cafe.yamds.detection.GameView;
+import cafe.yamds.detection.TextPart;
 
+import java.util.List;
 import java.util.Random;
 
-public class FishingController {
-    
-    private static final Random RANDOM = new Random();
-    private static long lastActionTime = 0;
-    private static FishingState state = FishingState.IDLE;
-    private static long reeledTime = 0; // 收杆时间
-    private static boolean waitingForGame = false; // 是否在等待游戏开始
-    private static long castStartTime = 0; // 投竿开始时间（用于超时重抛）
-    private static long noHookSince = 0; // 鱼钩消失计时（异常兜底：1分钟未抛竿强制抛竿）
-    private static long waitRecastSince = 0; // 等待重抛计时起点
-    private static long waitRecastDelayMs = 0; // 等待重抛间隔（毫秒）
-    
-    private enum FishingState {
-        IDLE,           // 空闲
-        CASTING,        // 投竿中
-        WAITING_BITE,   // 等待咬钩
-        FISH_BITE,      // 鱼咬钩了，准备收杆
-        PLAYING_GAME,   // 游戏中
-        REELING,        // 收竿中
-        WAIT_RECAST     // 等待间隔后重新抛竿
-    }
-    
-    /**
-     * 鱼咬钩回调（从 FishingHookMixin 调用）
-     */
-    public static void onFishBite() {
-        if (state == FishingState.WAITING_BITE) {
-            state = FishingState.FISH_BITE;
-            sendActionBarMessage("§e⚡上钩!");
-        }
-    }
-    
-    /**
-     * 发送 ActionBar 消息
-     */
-    private static void sendActionBarMessage(String message) {
-        try {
-            Minecraft mc = Minecraft.getInstance();
-            if (mc.player != null) {
-                mc.player.sendOverlayMessage(
-                    net.minecraft.network.chat.Component.literal(message)
-                );
-            }
-        } catch (Exception e) {
-            // 忽略
-        }
-    }
-    
-    public static void tick(Minecraft client) {
-        if (client.player == null || client.level == null) {
-            return;
-        }
-        
-        LocalPlayer player = client.player;
-        
-        // 检查是否持有鱼竿
-        if (!isHoldingFishingRod(player)) {
-            if (state != FishingState.IDLE) {
-                reset();
-            }
-            return;
-        }
-        
-        // 获取游戏状态
-        GameState gameState = TitleAnalyzer.getGameState();
-        long currentTime = System.currentTimeMillis();
+/**
+ * 自动钓鱼状态机。
+ *
+ * <p>设计约定：
+ * <ul>
+ *     <li>所有方法只在客户端线程调用，时间为毫秒时间戳，由调用方传入。</li>
+ *     <li>点击决策发生在 {@link #onGameText}（即收到 UI 包的那一刻），
+ *         不再等下一个 tick，去掉最多 50ms 的额外延迟。</li>
+ *     <li>本类不依赖任何 Minecraft 类型，可直接用假环境做单元测试。</li>
+ * </ul>
+ */
+public final class FishingController {
 
-        // 超时未收杆：强制收杆并重新抛竿
-        if ((state == FishingState.CASTING || state == FishingState.WAITING_BITE)
-            && shouldForceRecast(currentTime)) {
-            sendActionBarMessage("§7超时未收杆，重新抛竿...");
-            performClick(client);
-            waitingForGame = false;
-            reset();
-            scheduleRecast();
+    /** 两次主动操作之间的最小间隔，避免发包过快。 */
+    static final long CAST_COOLDOWN_MS = 500;
+    /** 收杆后等待小游戏 UI 出现的超时；超时视为钓到普通物品。 */
+    static final long GAME_START_TIMEOUT_MS = 500;
+    /** 收杆后等待鱼钩消失的超时。 */
+    static final long REELING_TIMEOUT_MS = 1_000;
+    /** 鱼钩消失过久的兜底保护。 */
+    static final long NO_HOOK_WATCHDOG_MS = 60_000;
+    /** 重抛间隔下限。 */
+    private static final long MIN_RECAST_DELAY_MS = 200;
+
+    private final FishingEnvironment env;
+    private final AutoFishConfig config;
+    private final CurveSource curves;
+    private final FishingLog log;
+    private final Random random;
+    private final FishingUiDetector detector = new FishingUiDetector();
+    private final ClickPredictor predictor = new ClickPredictor();
+
+    private FishingState state = FishingState.IDLE;
+    private long stateEnteredAt;
+    private long lastActionAt;
+    private long castAt;
+    private long recastDelayMs;
+    private long hookAbsentSince;
+
+    public FishingController(
+            FishingEnvironment env,
+            AutoFishConfig config,
+            CurveSource curves,
+            FishingLog log,
+            Random random
+    ) {
+        this.env = env;
+        this.config = config;
+        this.curves = curves;
+        this.log = log;
+        this.random = random;
+    }
+
+    public FishingState state() {
+        return state;
+    }
+
+    /** 驱动状态机的周期逻辑；建议每个客户端 tick 调用一次。 */
+    public void tick(long now) {
+        if (!config.modEnabled) {
             return;
         }
-        
-        // 异常兜底：鱼钩消失超过1分钟仍未重新抛竿（状态机卡死），强制抛竿
-        if (player.fishing == null) {
-            if (noHookSince == 0) {
-                noHookSince = currentTime;
-            } else if (currentTime - noHookSince > 60_000) {
-                sendActionBarMessage("§c⚠检测到1分钟未抛竿，强制抛竿...");
-                noHookSince = 0;
-                reset();
-                scheduleRecast();
+        if (!env.holdingRod()) {
+            if (state != FishingState.IDLE) {
+                resetSession(now);
+            }
+            return;
+        }
+        if (handleTimeouts(now)) {
+            return;
+        }
+
+        switch (state) {
+            case IDLE -> {
+                if (env.hasHook()) {
+                    enter(FishingState.WAITING_BITE, now);
+                } else if (now - lastActionAt >= CAST_COOLDOWN_MS) {
+                    cast(now);
+                }
+            }
+            case RECAST_DELAY -> {
+                if (now - stateEnteredAt >= recastDelayMs) {
+                    enter(FishingState.IDLE, now);
+                }
+            }
+            case CASTING -> {
+                if (env.hasHook()) {
+                    enter(FishingState.WAITING_BITE, now);
+                }
+            }
+            case WAITING_BITE -> {
+                // UI 已经出现（例如手动触发了小游戏）：直接进入游戏。
+                if (detector.view(now).active()) {
+                    enter(FishingState.PLAYING, now);
+                }
+            }
+            case WAITING_GAME -> {
+                if (detector.view(now).active()) {
+                    enter(FishingState.PLAYING, now);
+                } else if (now - stateEnteredAt >= GAME_START_TIMEOUT_MS) {
+                    env.actionBar("§7未检测到小游戏，重新抛竿...");
+                    startRecastDelay(now);
+                }
+            }
+            case PLAYING -> {
+                // 1 秒没有新的 UI 帧 = 小游戏结束（可能漏点）。
+                if (!detector.view(now).active()) {
+                    startRecastDelay(now);
+                }
+            }
+            case REELING -> {
+                if (!env.hasHook() || now - stateEnteredAt >= REELING_TIMEOUT_MS) {
+                    startRecastDelay(now);
+                }
+            }
+        }
+    }
+
+    /**
+     * 鱼咬钩回调（由鱼钩 Mixin 在 biting 变化时调用）。
+     * 立即收杆进入小游戏，不再等下一个 tick。
+     */
+    public void onBite(long now) {
+        if (!config.modEnabled || state != FishingState.WAITING_BITE) {
+            return;
+        }
+        reel(now);
+        enter(FishingState.WAITING_GAME, now);
+        env.actionBar("§e⚡上钩!");
+    }
+
+    /**
+     * 收到 Subtitle / ActionBar 组件时调用。若本帧处于完美位置，立即收杆。
+     */
+    public void onGameText(List<TextPart> parts, long now) {
+        if (!config.modEnabled) {
+            return;
+        }
+
+        detector.onUi(parts, now).ifPresent(view -> {
+            env.actionBar(view.hudLine());
+
+            if (state == FishingState.WAITING_BITE || state == FishingState.WAITING_GAME) {
+                enter(FishingState.PLAYING, now);
+            }
+            if (state != FishingState.PLAYING) {
                 return;
             }
-        } else {
-            noHookSince = 0; // 鱼钩存在，重置计时
-        }
-        
-        // 状态机逻辑
-        switch (state) {
-            case IDLE:
-                // 如果没有鱼钩实体，尝试投竿（未成功则保持IDLE，下个tick自动重试）
-                if (player.fishing == null && castRod(client)) {
-                    state = FishingState.CASTING;
-                }
-                break;
-                
-            case WAIT_RECAST:
-                // 等待间隔到期后自动重新抛竿
-                if (currentTime - waitRecastSince >= waitRecastDelayMs) {
-                    state = FishingState.IDLE;
-                }
-                break;
-                
-            case CASTING:
-                // 等待鱼钩实体生成
-                if (player.fishing != null) {
-                    state = FishingState.WAITING_BITE;
-                }
-                break;
-                
-            case WAITING_BITE:
-                // 检查是否开始游戏（已经收杆后）
-                if (gameState.isGameActive()) {
-                    state = FishingState.PLAYING_GAME;
-                    waitingForGame = false;
-                }
-                // 如果在等待游戏开始，检查超时
-                else if (waitingForGame && System.currentTimeMillis() - reeledTime > 500) {
-                    // 0.5秒内没有检测到游戏，说明钓到了普通物品
-                    sendActionBarMessage("§7钓到普通物品，重新抛竿...");
-                    waitingForGame = false;
-                    reset();
-                    scheduleRecast();
-                }
-                // 检查鱼钩是否消失
-                else if (player.fishing == null) {
-                    if (waitingForGame) {
-                        // 鱼钩消失但没有游戏，说明钓到了普通物品
-                        sendActionBarMessage("§7钓到普通物品，重新抛竿...");
-                        waitingForGame = false;
-                        reset();
-                        scheduleRecast();
-                    } else {
-                        reset();
-                    }
-                }
-                break;
-                
-            case FISH_BITE:
-                // 鱼咬钩了，立即收杆触发小游戏
-                performClick(client);
-                reeledTime = System.currentTimeMillis();
-                waitingForGame = true;
-                castStartTime = 0;
-                state = FishingState.WAITING_BITE; // 收杆后等待游戏开始
-                break;
-                
-            case PLAYING_GAME:
-                // 游戏进行中 - 检测shouldClick标志并立即收杆
-                if (gameState.isGameActive()) {
-                    // 检查是否应该点击（由TitleAnalyzer设置）
-                    if (gameState.shouldClick()) {
-                        // 立即收杆
-                        AutoFishingMod.LOGGER.info("§a✓ SUCCESS POSITION! Clicking at position {}", gameState.getPointerPosition());
-                        performClick(client);
-                        
-                        // 记录到钓鱼日志（只在收杆时记录）
-                        if (gameState.getCurrentBarType() > 0) {
-                            FishingLog.addLog(
-                                gameState.getCurrentBarType(),
-                                gameState.getCurrentSpeed(),
-                                gameState.getPointerPosition()
-                            );
-                        }
-                        
-                        gameState.setShouldClick(false); // 重置标志
-                        state = FishingState.REELING;
-                    }
-                } else if (player.fishing == null) {
-                    // 游戏结束
-                    AutoFishingMod.LOGGER.info("=== GAME END ===");
-                    reset();
-                    scheduleRecast();
-                }
-                break;
-                
-            case REELING:
-                // 等待收竿完成
-                if (player.fishing == null) {
-                    reset();
-                    scheduleRecast();
-                }
-                break;
-        }
-    }
-    
-    /**
-     * 执行点击（收竿）
-     */
-    private static void performClick(Minecraft client) {
-        if (client.gameMode != null && client.player != null) {
-            client.gameMode.useItem(
-                client.player,
-                InteractionHand.MAIN_HAND
+
+            ClickPredictor.Decision decision = predictor.decide(
+                    view,
+                    curves.curveFor(view.barType()),
+                    config.globalAdvance
             );
-            lastActionTime = System.currentTimeMillis();
-            sendActionBarMessage("§d⚡上钩!");
-        }
-    }
-    
-    /**
-     * 投竿
-     * @return 是否成功发起投竿（受500ms防过快限制，失败时保持IDLE自动重试）
-     */
-    private static boolean castRod(Minecraft client) {
-        long currentTime = System.currentTimeMillis();
-        
-        // 防止操作过快
-        if (currentTime - lastActionTime < 500) {
-            return false;
-        }
-        
-        if (client.gameMode != null && client.player != null) {
-            client.gameMode.useItem(
-                client.player,
-                InteractionHand.MAIN_HAND
-            );
-            lastActionTime = currentTime;
-            castStartTime = currentTime;
-            sendActionBarMessage("§b🎣等待咬钩...");
-            return true;
-        }
-        return false;
-    }
-    
-    /**
-     * 安排重新投竿（间隔可配置，带随机浮动）
-     * 由主循环 tick 计时（WAIT_RECAST 状态），不使用后台线程，避免覆盖状态导致卡死
-     */
-    private static void scheduleRecast() {
-        // 基础间隔 ± 随机浮动（秒），模拟真人操作节奏
-        AutoFishConfig cfg = AutoFishConfig.get();
-        double base = Math.max(0.1, cfg.castIntervalSeconds);
-        double range = Math.max(0.0, cfg.castIntervalRandomSeconds);
-        double delayMs = (base - range + RANDOM.nextDouble() * range * 2.0) * 1000.0;
-        if (delayMs < 200) {
-            delayMs = 200; // 下限保护，避免操作过快
-        }
-        waitRecastDelayMs = (long) delayMs;
-        waitRecastSince = System.currentTimeMillis();
-        state = FishingState.WAIT_RECAST;
-    }
-    
-    /**
-     * 检查是否持有鱼竿
-     */
-    private static boolean isHoldingFishingRod(LocalPlayer player) {
-        ItemStack mainHand = player.getItemInHand(InteractionHand.MAIN_HAND);
-        ItemStack offHand = player.getItemInHand(InteractionHand.OFF_HAND);
-        return mainHand.getItem() == Items.FISHING_ROD || offHand.getItem() == Items.FISHING_ROD;
-    }
-    
-    /**
-     * 重置状态
-     */
-    private static void reset() {
-        state = FishingState.IDLE;
-        waitingForGame = false;
-        reeledTime = 0;
-        castStartTime = 0;
-        noHookSince = 0;
-        TitleAnalyzer.reset();
+            if (decision.click()) {
+                AutoFishingMod.LOGGER.debug(
+                        "Click: bar={} pos={} speed={}ms target={}",
+                        view.barType(), view.position(), view.speedMs(), decision.targetPosition());
+                reel(now);
+                log.add(view.barType(), view.speedMs(), view.position(), decision.targetPosition());
+                enter(FishingState.REELING, now);
+            }
+        });
     }
 
-    private static boolean shouldForceRecast(long currentTime) {
-        double minutes = AutoFishConfig.get().autoRecastMinutes;
-        if (minutes <= 0 || castStartTime <= 0) {
+    /** 收到 Title 组件时调用（用于提前识别小游戏开始）。 */
+    public void onTitleText(List<TextPart> parts, long now) {
+        if (!config.modEnabled) {
+            return;
+        }
+        detector.onTitle(parts, now);
+    }
+
+    /** 丢弃当前会话（关闭 Mod、切走鱼竿等）。 */
+    public void reset(long now) {
+        resetSession(now);
+    }
+
+    private boolean handleTimeouts(long now) {
+        // 抛竿后长时间没有咬钩：强制收杆重抛。
+        if (config.autoRecastMinutes > 0
+                && castAt > 0
+                && (state == FishingState.CASTING || state == FishingState.WAITING_BITE)
+                && now - castAt >= (long) (config.autoRecastMinutes * 60_000.0)) {
+            env.actionBar("§7超时未收杆，重新抛竿...");
+            reel(now);
+            startRecastDelay(now);
+            return true;
+        }
+
+        // 鱼钩消失过久（状态机卡死兜底）。
+        if (env.hasHook()) {
+            hookAbsentSince = 0;
             return false;
         }
-        long timeoutMs = (long) (minutes * 60_000L);
-        return currentTime - castStartTime >= timeoutMs;
+        if (state == FishingState.IDLE || state == FishingState.RECAST_DELAY) {
+            return false;
+        }
+        if (hookAbsentSince == 0) {
+            hookAbsentSince = now;
+            return false;
+        }
+        if (now - hookAbsentSince < NO_HOOK_WATCHDOG_MS) {
+            return false;
+        }
+
+        env.actionBar("§c⚠检测到1分钟未抛竿，强制抛竿...");
+        detector.reset();
+        hookAbsentSince = 0;
+        startRecastDelay(now);
+        return true;
+    }
+
+    private void cast(long now) {
+        env.castRod();
+        lastActionAt = now;
+        castAt = now;
+        enter(FishingState.CASTING, now);
+        env.actionBar("§b🎣等待咬钩...");
+    }
+
+    private void reel(long now) {
+        env.reelIn();
+        lastActionAt = now;
+        castAt = 0;
+    }
+
+    private void resetSession(long now) {
+        detector.reset();
+        state = FishingState.IDLE;
+        stateEnteredAt = now;
+        castAt = 0;
+        hookAbsentSince = 0;
+    }
+
+    private void enter(FishingState next, long now) {
+        if (state != next) {
+            AutoFishingMod.LOGGER.debug("Fishing state: {} -> {}", state, next);
+        }
+        state = next;
+        stateEnteredAt = now;
+
+        // 进入新回合（等待游戏/空闲）时清空上一局的 UI 数据；
+        // 进入 PLAYING 时绝不能清空，否则会把刚收到的这一帧丢掉。
+        if (next == FishingState.IDLE || next == FishingState.WAITING_GAME) {
+            detector.reset();
+            if (next == FishingState.IDLE) {
+                castAt = 0;
+            }
+        }
+    }
+
+    private void startRecastDelay(long now) {
+        recastDelayMs = randomRecastDelayMs();
+        state = FishingState.RECAST_DELAY;
+        stateEnteredAt = now;
+        castAt = 0;
+        detector.reset();
+    }
+
+    private long randomRecastDelayMs() {
+        double base = Math.max(0.1, config.castIntervalSeconds);
+        double range = Math.max(0.0, config.castIntervalRandomSeconds);
+        double delayMs = (base - range + random.nextDouble() * range * 2.0) * 1000.0;
+        return Math.max(MIN_RECAST_DELAY_MS, (long) delayMs);
     }
 }

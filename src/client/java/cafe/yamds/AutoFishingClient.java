@@ -1,54 +1,29 @@
 package cafe.yamds;
 
-import cafe.yamds.config.AutoFishConfig;
-import cafe.yamds.config.AutoFishConfigScreen;
-import cafe.yamds.config.KeyBindings;
-import cafe.yamds.fishing.FishingController;
+import cafe.yamds.ui.KeyBindings;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
-import net.minecraft.network.chat.Component;
+import net.minecraft.client.Minecraft;
 
+/**
+ * 客户端入口：只负责创建运行时、注册快捷键与 tick 事件。
+ */
 public class AutoFishingClient implements ClientModInitializer {
-    
+
+    private static ModRuntime runtime;
+
+    /** Mixin 与 UI 访问运行时实例的入口；初始化完成前为 null。 */
+    public static ModRuntime runtime() {
+        return runtime;
+    }
+
     @Override
     public void onInitializeClient() {
         AutoFishingMod.LOGGER.info("Auto Fishing Client initialized!");
-        
-        // 加载配置
-        AutoFishConfig.load();
-        
-        // 注册快捷键
+
         KeyBindings.register();
-        
-        // 注册tick事件
-        ClientTickEvents.END_CLIENT_TICK.register(client -> {
-            // 检查快捷键 - 切换mod开关
-            while (KeyBindings.toggleAutoFishing.consumeClick()) {
-                AutoFishConfig config = AutoFishConfig.get();
-                config.modEnabled = !config.modEnabled;
-                AutoFishConfig.save();
-                
-                if (client.player != null) {
-                    client.player.sendSystemMessage(
-                        Component.literal(
-                            config.modEnabled ? "§a[Auto Fishing] Enabled" : "§c[Auto Fishing] Disabled"
-                        )
-                    );
-                }
-                AutoFishingMod.LOGGER.info("Auto Fishing: {}", config.modEnabled ? "ON" : "OFF");
-            }
-            
-            // 检查快捷键 - 打开配置界面
-            while (KeyBindings.openConfig.consumeClick()) {
-                if (client.player != null) {
-                    client.gui.setScreen(AutoFishConfigScreen.createConfigScreen(client.gui.screen()));
-                }
-            }
-            
-            // 执行自动钓鱼逻辑
-            if (AutoFishConfig.get().modEnabled && client.player != null) {
-                FishingController.tick(client);
-            }
-        });
+        runtime = new ModRuntime(Minecraft.getInstance());
+
+        ClientTickEvents.END_CLIENT_TICK.register(runtime::tick);
     }
 }

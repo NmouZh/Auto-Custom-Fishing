@@ -1,163 +1,121 @@
 package cafe.yamds.config;
 
-import cafe.yamds.AutoFishingMod;
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
-
-import java.io.File;
-import java.io.FileReader;
-import java.io.FileWriter;
-import java.io.IOException;
 import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * 自动钓鱼配置
- * 使用Cloth Config提供UI界面
+ * 自动钓鱼配置数据。
+ *
+ * <p>只负责“数据 + 规范化”，读写由 {@link ConfigStore} 负责。
+ * Gson 反序列化会调用无参构造器，因此旧配置缺失字段时会自动保留这里的默认值，
+ * 不再需要手工逐字段兜底。
  */
-public class AutoFishConfig {
-    
+public final class AutoFishConfig {
+
+    public static final int BAR_COUNT = 9;
+
     // ========== 主设置 ==========
-    public boolean modEnabled = true;  // Mod总开关
-    public double globalAdvance = 0.0;  // 全局提前量（-2.0 到 2.0）
-    public double autoRecastMinutes = 2.0;  // 抛竿后自动收杆（分钟），默认值来自游戏中调校的最佳延迟（autofishing.json）
-    public double castIntervalSeconds = 1.0;  // 抛竿间隔（秒）：收杆后到重新抛竿的基础等待时间
-    public double castIntervalRandomSeconds = 0.5;  // 抛竿间隔随机浮动（秒）：每次实际间隔在基础值±范围内随机，模拟真人操作
-    
+    /** Mod 总开关 */
+    public boolean modEnabled = true;
+    /** 全局提前量（格），叠加在所有 bar 曲线上 */
+    public double globalAdvance = 0.0;
+    /** 抛竿后多久仍未收杆就强制收杆重抛（分钟），0 关闭 */
+    public double autoRecastMinutes = 2.0;
+    /** 收杆后到重新抛竿的基础等待时间（秒） */
+    public double castIntervalSeconds = 1.0;
+    /** 抛竿间隔随机浮动（秒），实际间隔在基础值 ± 范围内随机 */
+    public double castIntervalRandomSeconds = 0.5;
+
     // ========== 曲线设置 ==========
-    // 每个bar的提前量曲线
-    public Map<Integer, List<CurvePoint>> barCurves = new HashMap<>();
-    
-    // ========== 单例和持久化 ==========
-    private static AutoFishConfig instance;
-    private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
-    private static final File CONFIG_FILE = new File("config/autofishing.json");
-    
-    public AutoFishConfig() {
-        // 初始化所有bar的默认曲线
-        // 默认值 = 用户在游戏中调校的最佳延迟（对应 versions/26.2-Fabric 0.19.3/config/autofishing.json）
-        // Bar 1-3: 11格bar，简单配置
-        for (int i = 1; i <= 3; i++) {
-            List<CurvePoint> curve = new ArrayList<>();
-            curve.add(new CurvePoint(0.0, 0.2));
-            curve.add(new CurvePoint(35.0, -0.2));
-            barCurves.put(i, curve);
+    /** 每个 bar 的提前量曲线：速度(ms/格) → 提前量(格) */
+    public Map<Integer, List<CurvePoint>> barCurves = defaultBarCurves();
+
+    /** 全部 bar 的默认曲线（默认参数来自游戏内调校）。 */
+    public static Map<Integer, List<CurvePoint>> defaultBarCurves() {
+        Map<Integer, List<CurvePoint>> curves = new LinkedHashMap<>();
+        for (int bar = 1; bar <= BAR_COUNT; bar++) {
+            curves.put(bar, defaultCurveFor(bar));
         }
-        
-        // Bar 4-6: 22格bar，中等配置
-        for (int i = 4; i <= 6; i++) {
-            List<CurvePoint> curve = new ArrayList<>();
-            curve.add(new CurvePoint(0.0, 1.5));
-            curve.add(new CurvePoint(16.8, 1.2));
-            curve.add(new CurvePoint(20.0, 0.9));
-            curve.add(new CurvePoint(35.0, 0.7));
-            barCurves.put(i, curve);
-        }
-        
-        // Bar 7-9: 44格bar，高难度配置
-        for (int i = 7; i <= 9; i++) {
-            List<CurvePoint> curve = new ArrayList<>();
-            curve.add(new CurvePoint(0.0, 2.4));
-            curve.add(new CurvePoint(31.8, 1.7));
-            curve.add(new CurvePoint(35.0, 1.5));
-            barCurves.put(i, curve);
-        }
+        return curves;
     }
-    
-    public static AutoFishConfig get() {
-        if (instance == null) {
-            load();
+
+    /**
+     * 单个 bar 的默认曲线。
+     * bar 1-3：简单；4-6：中等；7-9：高难度、更积极的提前量。
+     */
+    public static List<CurvePoint> defaultCurveFor(int barNum) {
+        if (barNum <= 3) {
+            return List.of(
+                    new CurvePoint(0.0, 0.2),
+                    new CurvePoint(35.0, -0.2)
+            );
         }
-        return instance;
+        if (barNum <= 6) {
+            return List.of(
+                    new CurvePoint(0.0, 1.5),
+                    new CurvePoint(16.8, 1.2),
+                    new CurvePoint(20.0, 0.9),
+                    new CurvePoint(35.0, 0.7)
+            );
+        }
+        return List.of(
+                new CurvePoint(0.0, 2.4),
+                new CurvePoint(31.8, 1.7),
+                new CurvePoint(35.0, 1.5)
+        );
     }
-    
-    public static void load() {
-        try {
-            if (!CONFIG_FILE.getParentFile().exists()) {
-                CONFIG_FILE.getParentFile().mkdirs();
-            }
-            
-            if (CONFIG_FILE.exists()) {
-                try (FileReader reader = new FileReader(CONFIG_FILE)) {
-                    instance = GSON.fromJson(reader, AutoFishConfig.class);
-                    // 确保所有bar曲线都存在
-                    // Bar 1-3
-                    for (int i = 1; i <= 3; i++) {
-                        if (!instance.barCurves.containsKey(i) || instance.barCurves.get(i).isEmpty()) {
-                            List<CurvePoint> curve = new ArrayList<>();
-                            curve.add(new CurvePoint(0.0, 0.2));
-                            curve.add(new CurvePoint(35.0, -0.2));
-                            instance.barCurves.put(i, curve);
-                        }
-                    }
-                    // Bar 4-6
-                    for (int i = 4; i <= 6; i++) {
-                        if (!instance.barCurves.containsKey(i) || instance.barCurves.get(i).isEmpty()) {
-                            List<CurvePoint> curve = new ArrayList<>();
-                            curve.add(new CurvePoint(0.0, 1.5));
-                            curve.add(new CurvePoint(16.8, 1.2));
-                            curve.add(new CurvePoint(20.0, 0.9));
-                            curve.add(new CurvePoint(35.0, 0.7));
-                            instance.barCurves.put(i, curve);
-                        }
-                    }
-                    // Bar 7-9
-                    for (int i = 7; i <= 9; i++) {
-                        if (!instance.barCurves.containsKey(i) || instance.barCurves.get(i).isEmpty()) {
-                            List<CurvePoint> curve = new ArrayList<>();
-                            curve.add(new CurvePoint(0.0, 2.4));
-                            curve.add(new CurvePoint(31.8, 1.7));
-                            curve.add(new CurvePoint(35.0, 1.5));
-                            instance.barCurves.put(i, curve);
-                        }
-                    }
-                    AutoFishingMod.LOGGER.info("Config loaded from {}", CONFIG_FILE.getPath());
-                }
-            } else {
-                instance = new AutoFishConfig();
-                save();
-                AutoFishingMod.LOGGER.info("Created default config at {}", CONFIG_FILE.getPath());
-            }
-        } catch (Exception e) {
-            AutoFishingMod.LOGGER.error("Failed to load config", e);
-            instance = new AutoFishConfig();
+
+    /**
+     * 校验并补全配置。所有非常值、越界值、缺失曲线都在这里被修正。
+     */
+    public void validate() {
+        if (!Double.isFinite(globalAdvance)) {
+            globalAdvance = 0.0;
+        }
+        globalAdvance = clamp(globalAdvance, -1.0, 3.0);
+
+        if (!Double.isFinite(autoRecastMinutes) || autoRecastMinutes < 0.0) {
+            autoRecastMinutes = 2.0;
+        }
+        if (!Double.isFinite(castIntervalSeconds) || castIntervalSeconds <= 0.0) {
+            castIntervalSeconds = 1.0;
+        }
+        if (!Double.isFinite(castIntervalRandomSeconds) || castIntervalRandomSeconds < 0.0) {
+            castIntervalRandomSeconds = 0.5;
         }
 
-        // 确保新增配置有默认值（负数视为异常，重置为调校后的默认延迟）
-        if (instance.autoRecastMinutes < 0) {
-            instance.autoRecastMinutes = 2.0;
+        Map<Integer, List<CurvePoint>> normalized = new LinkedHashMap<>();
+        for (int bar = 1; bar <= BAR_COUNT; bar++) {
+            List<CurvePoint> points = barCurves == null ? null : barCurves.get(bar);
+            normalized.put(bar, normalizeCurve(points, defaultCurveFor(bar)));
         }
-        // 旧配置文件缺少新字段时 Gson 会得到 0.0，需要兜底为默认值
-        if (instance.castIntervalSeconds <= 0) {
-            instance.castIntervalSeconds = 1.0;
-        }
-        if (instance.castIntervalRandomSeconds < 0) {
-            instance.castIntervalRandomSeconds = 0.5;
-        }
+        barCurves = normalized;
     }
-    
-    public static void save() {
-        try (FileWriter writer = new FileWriter(CONFIG_FILE)) {
-            GSON.toJson(instance, writer);
-            AutoFishingMod.LOGGER.info("Config saved to {}", CONFIG_FILE.getPath());
-        } catch (IOException e) {
-            AutoFishingMod.LOGGER.error("Failed to save config", e);
+
+    private static List<CurvePoint> normalizeCurve(List<CurvePoint> points, List<CurvePoint> fallback) {
+        if (points == null || points.size() < 2) {
+            return fallback;
         }
+        List<CurvePoint> result = new ArrayList<>(points.size());
+        for (CurvePoint point : points) {
+            if (point == null) {
+                continue;
+            }
+            result.add(new CurvePoint(
+                    clamp(point.speedMs(), AdvanceCurve.MIN_SPEED, AdvanceCurve.MAX_SPEED),
+                    clamp(point.advanceAmount(), AdvanceCurve.MIN_ADVANCE, AdvanceCurve.MAX_ADVANCE)
+            ));
+        }
+        if (result.size() < 2) {
+            return fallback;
+        }
+        result.sort(java.util.Comparator.comparingDouble(CurvePoint::speedMs));
+        return result;
     }
-    
-    /**
-     * 根据速度从曲线获取提前量
-     */
-    public double getAdvanceAmountFromCurve(int barType, double speedMs) {
-        List<CurvePoint> points = barCurves.get(barType);
-        if (points == null || points.isEmpty()) {
-            return 0.0;
-        }
-        
-        AdvanceCurve curve = new AdvanceCurve();
-        curve.setPoints(points);
-        return curve.getAdvanceAmount(speedMs);
+
+    private static double clamp(double value, double min, double max) {
+        return Math.max(min, Math.min(max, value));
     }
 }

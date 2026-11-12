@@ -23,6 +23,9 @@
   
   "config.autofishing.logs.title": "Recent 20 Fishing Records",
   "config.autofishing.logs.empty": "No records yet",
+
+  "config.autofishing.curve.open": "Open Bar %s Curve Editor",
+  "config.autofishing.curve.open.button": "Open Curve Editor",
   
   "key.autofishing.toggle": "Toggle Auto Fishing",
   "key.category.autofishing.autofishing": "Auto Fishing",
