@@ -30,7 +30,7 @@ The repository still includes an **advance curve editor**, specifically for adju
 
 ## Introduction
 
-This is a client-side auto-fishing mod written for the [Custom-Fishing](https://github.com/Xiao-MoMi/Custom-Fishing) server plugin, running on `Minecraft 26.2 + Fabric`.
+This is a client-side auto-fishing mod written for the [Custom-Fishing](https://github.com/Xiao-MoMi/Custom-Fishing) server plugin, running on `Minecraft 26.2 / 1.21.11 + Fabric`.
 
 The goal is straightforward: for Custom-Fishing's "Stardew Valley-like" fishing minigame, automate the whole repetitive loop of casting, waiting, detecting the minigame, judging the timing, and reeling in.
 
@@ -94,6 +94,15 @@ In short:
 - Fabric Loader: `0.19.3+`
 - Fabric API: `0.157.0+26.2`
 
+The same sources also build for `1.21.11`:
+
+- Minecraft: `1.21.11`
+- Java: `21`
+- Fabric Loader: `0.20.1+`
+- Fabric API: `0.141.6+1.21.11`
+- Cloth Config: `21.11.153+fabric`
+- Mod Menu: `17.0.1`
+
 ### Installation
 
 1. Build the project, or use a pre-built jar.
@@ -138,7 +147,6 @@ src/main/java/cafe/yamds/
 
 src/client/java/cafe/yamds/
   AutoFishingClient.java             Client entry point (wiring only)
-  ModRuntime.java                    Runtime assembly and event forwarding
   detection/
     ComponentScanner.java            Component → text parts
     UiDecoder.java                   Custom-Fishing protocol decoder (pure)
@@ -148,7 +156,7 @@ src/client/java/cafe/yamds/
   fishing/
     FishingController.java           State machine (pure)
     ClickPredictor.java              Click timing prediction (pure)
-    MinecraftFishingEnvironment.java Minecraft action glue
+    FishingEnvironment.java          Minecraft action interface
     FishingLog.java                  Click log
   config/
     AutoFishConfig.java              Config data and validation
@@ -156,12 +164,18 @@ src/client/java/cafe/yamds/
     AdvanceCurve.java / CurvePoint.java
   ui/
     AutoFishConfigScreen.java        Cloth Config screen
-    CurveEditorScreen.java           Curve editor
     BarVisualizer.java               Bar visualization
-    KeyBindings.java / ModMenuIntegration.java
+    ModMenuIntegration.java          Mod Menu integration
   mixin/
     FishingHookMixin.java            Bite detection
-    HudMixin.java                    Title / Subtitle / ActionBar interception
+
+src/versions/26.2/java/cafe/yamds/   26.2-only glue
+  ModRuntime.java                    Runtime assembly
+  fishing/MinecraftFishingEnvironment.java
+  ui/KeyBindings.java, CurveEditorScreen.java, CurveEditorWidget.java, OpenCurveEditorEntry.java
+  mixin/HudMixin.java                Hud class
+
+src/versions/1.21.11/java/cafe/yamds/ 1.21.11-only glue (same 7 files)
 
 src/test/java/                       Pure JVM unit tests (no Minecraft)
 ```
@@ -169,8 +183,13 @@ src/test/java/                       Pure JVM unit tests (no Minecraft)
 ## Development and Testing
 
 ```bash
-./gradlew build      # build
+./gradlew build      # build for 26.2
 ./gradlew test       # run unit tests
+
+# build for 1.21.11 (requires JDK 21)
+./gradlew build -Pminecraft_version=1.21.11 -Pjava_version=21 \
+  -Ploader_version=0.20.1 -Pfabric_version=0.141.6+1.21.11 \
+  -Pcloth_config_version=21.11.153+fabric -Pmodmenu_version=17.0.1
 ```
 
 Architecture rules, state diagram and extension guide: [AGENTS.md](AGENTS.md).

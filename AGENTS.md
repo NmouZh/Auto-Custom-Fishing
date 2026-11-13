@@ -1,16 +1,23 @@
 # Auto Custom Fishing — 开发者指南
 
-Minecraft 26.2 / Fabric 客户端 mod：自动完成 Custom-Fishing 服务端插件的河钓小游戏。
+Minecraft 26.2 / 1.21.11 / Fabric 客户端 mod：自动完成 Custom-Fishing 服务端插件的河钓小游戏。
 本文件面向在本仓库工作的开发者与 AI agent。
 
 ## 常用命令
 
 ```bash
-./gradlew build              # 构建（产物在 build/libs/）
+./gradlew build              # 构建默认版本（26.2，产物在 build/libs/）
 ./gradlew compileClientJava  # 只编译客户端源码，最快的语法检查
 ./gradlew test               # 纯 JVM 单元测试，不启动 Minecraft
-./gradlew runClient          # 启动开发客户端（需要 JDK 25）
+./gradlew runClient          # 启动开发客户端（26.2 需要 JDK 25）
+
+# 构建 1.21.11：覆盖版本属性（JDK 21）
+./gradlew build -Pminecraft_version=1.21.11 -Pjava_version=21 \
+  -Ploader_version=0.20.1 -Pfabric_version=0.141.6+1.21.11 \
+  -Pcloth_config_version=21.11.153+fabric -Pmodmenu_version=17.0.1
 ```
+
+GitHub Actions 用同一个矩阵并行构建两个版本，配置见 `.github/workflows/build.yml`。
 
 ## 架构
 
@@ -25,6 +32,19 @@ mixin/            只做事件转发（HudMixin、FishingHookMixin）
        ├─ config/         配置数据 + 读写 + 曲线缓存（数据层无 MC 依赖）
        └─ ui/             Cloth Config 界面、曲线编辑器、快捷键、Mod Menu
 ```
+
+共享代码在 `src/client/java`。与 Minecraft 版本相关的胶水代码在
+`src/versions/<minecraft_version>/java`，构建时只加入当前版本的目录。目前有 7 个文件按版本分叉：
+
+| 文件 | 26.2 | 1.21.11 |
+| --- | --- | --- |
+| `mixin/HudMixin` | `net.minecraft.client.gui.Hud` | `net.minecraft.client.gui.Gui` |
+| `ModRuntime` | `client.gui.setScreen` / `client.gui.screen()` | `client.setScreen` / `client.screen` |
+| `fishing/MinecraftFishingEnvironment` | `sendOverlayMessage` | `displayClientMessage(msg, true)` |
+| `ui/KeyBindings` | `KeyMappingHelper` | `KeyBindingHelper` |
+| `ui/CurveEditorScreen` | `GuiGraphicsExtractor.extractRenderState` | `GuiGraphics.render` |
+| `ui/CurveEditorWidget` | `extractWidgetRenderState` | `renderWidget` |
+| `ui/OpenCurveEditorEntry` | Cloth `extractRenderState` | Cloth `render` |
 
 ### 一帧 UI 的数据流
 
@@ -59,24 +79,27 @@ IDLE ──cast──▶ CASTING ──hook──▶ WAITING_BITE ──bite─�
 4. **核心逻辑不依赖 Minecraft 类型**：`detection/`、`fishing/FishingController`、
    `config/` 的数据类都不应 import `net.minecraft.*`。只有 `ComponentScanner`、
    `MinecraftFishingEnvironment`、`ModRuntime`、`ui/`、`mixin/` 允许接触 MC。
-5. **时间由调用方传入**：核心逻辑接收毫秒时间戳，不直接读系统时钟，方便测试。
-6. **配置向后兼容**：`config/autofishing.json` 的字段名是用户接口。缺字段靠
+5. **版本差异只放在 `src/versions/<mc>/`**：共享代码不能出现只在某个版本存在的
+   API（如 `GuiGraphicsExtractor`、`sendOverlayMessage`）。改版本胶水时两份都要同步。
+6. **时间由调用方传入**：核心逻辑接收毫秒时间戳，不直接读系统时钟，方便测试。
+7. **配置向后兼容**：`config/autofishing.json` 的字段名是用户接口。缺字段靠
    `AutoFishConfig` 的字段初始值补默认值；改字段名必须做迁移。
-7. **新逻辑要带测试**：纯逻辑测试放在 `src/test/java`，用假环境或构造的 `TextPart` 驱动。
+8. **新逻辑要带测试**：纯逻辑测试放在 `src/test/java`，用假环境或构造的 `TextPart` 驱动。
 
 ## 目录速查
 
 | 路径 | 职责 |
 | --- | --- |
 | `src/client/java/cafe/yamds/AutoFishingClient.java` | 客户端入口，只做接线 |
-| `src/client/java/cafe/yamds/ModRuntime.java` | 运行时装配、信号转发、快捷键 |
 | `src/client/java/cafe/yamds/detection/UiDecoder.java` | Custom-Fishing 协议解码（纯） |
 | `src/client/java/cafe/yamds/detection/BarTable.java` | 9 种 bar 的参数与成功率表 |
 | `src/client/java/cafe/yamds/detection/FishingUiDetector.java` | 最新帧、测速、活跃判定 |
 | `src/client/java/cafe/yamds/fishing/FishingController.java` | 状态机（纯） |
 | `src/client/java/cafe/yamds/fishing/ClickPredictor.java` | 提前量判定（纯） |
 | `src/client/java/cafe/yamds/config/ConfigStore.java` | 配置加载/保存/曲线缓存 |
-| `src/client/java/cafe/yamds/ui/` | 配置界面、曲线编辑器、快捷键 |
+| `src/client/java/cafe/yamds/ui/` | 配置界面、曲线编辑器、Mod Menu（跨版本共享部分） |
+| `src/versions/26.2/java/` | 26.2 专用胶水（HUD/渲染/快捷键） |
+| `src/versions/1.21.11/java/` | 1.21.11 专用胶水 |
 | `src/test/java/` | 单元测试 |
 
 ## 扩展指南

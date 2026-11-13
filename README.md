@@ -34,7 +34,7 @@
 
 ## 项目简介
 
-这是一个为 [Custom-Fishing](https://github.com/Xiao-MoMi/Custom-Fishing) 服务端插件编写的客户端自动钓鱼 Mod，运行在 `Minecraft 26.2 + Fabric`。
+这是一个为 [Custom-Fishing](https://github.com/Xiao-MoMi/Custom-Fishing) 服务端插件编写的客户端自动钓鱼 Mod，运行在 `Minecraft 26.2 / 1.21.11 + Fabric`。
 
 项目目标很直接：针对 Custom-Fishing 的“仿星露谷”钓鱼小游戏，把重复的抛竿、等待、识别小游戏、判断时机、收杆这一整套流程自动化。
 
@@ -100,6 +100,15 @@ Custom-Fishing 的河钓并不是原版 Minecraft 那种“浮漂下沉就收杆
 - Fabric API: `0.157.0+26.2`
 - Cloth Config / Mod Menu（可选）
 
+`1.21.11` 版本使用相同的源码构建：
+
+- Minecraft: `1.21.11`
+- Java: `21`
+- Fabric Loader: `0.20.1+`
+- Fabric API: `0.141.6+1.21.11`
+- Cloth Config: `21.11.153+fabric`
+- Mod Menu: `17.0.1`
+
 ### 安装
 
 1. 编译项目，或使用已构建好的 jar。
@@ -144,7 +153,6 @@ src/main/java/cafe/yamds/
 
 src/client/java/cafe/yamds/
   AutoFishingClient.java             客户端入口（只做接线）
-  ModRuntime.java                    运行时装配、事件转发
   detection/
     ComponentScanner.java            Component → 文本片段
     UiDecoder.java                   Custom-Fishing 协议解码（纯逻辑）
@@ -154,7 +162,7 @@ src/client/java/cafe/yamds/
   fishing/
     FishingController.java           状态机（纯逻辑）
     ClickPredictor.java              点击时机预测（纯逻辑）
-    MinecraftFishingEnvironment.java Minecraft 动作胶水
+    FishingEnvironment.java          MC 动作接口
     FishingLog.java                  点击日志
   config/
     AutoFishConfig.java              配置数据与校验
@@ -162,12 +170,18 @@ src/client/java/cafe/yamds/
     AdvanceCurve.java / CurvePoint.java
   ui/
     AutoFishConfigScreen.java        Cloth Config 界面
-    CurveEditorScreen.java           曲线编辑器
     BarVisualizer.java               bar 可视化
-    KeyBindings.java / ModMenuIntegration.java
+    ModMenuIntegration.java          Mod Menu 集成
   mixin/
     FishingHookMixin.java            咬钩检测
-    HudMixin.java                    Title / Subtitle / ActionBar 拦截
+
+src/versions/26.2/java/cafe/yamds/    26.2 专用胶水
+  ModRuntime.java                    运行时装配
+  fishing/MinecraftFishingEnvironment.java
+  ui/KeyBindings.java, CurveEditorScreen.java, CurveEditorWidget.java, OpenCurveEditorEntry.java
+  mixin/HudMixin.java                Hud 类
+
+src/versions/1.21.11/java/cafe/yamds/ 1.21.11 专用胶水（同上 7 个文件）
 
 src/test/java/                       纯 JVM 单元测试（不启动 Minecraft）
 ```
@@ -175,8 +189,13 @@ src/test/java/                       纯 JVM 单元测试（不启动 Minecraft�
 ## 开发与测试
 
 ```bash
-./gradlew build      # 构建
+./gradlew build      # 构建 26.2
 ./gradlew test       # 运行单元测试
+
+# 构建 1.21.11（需要 JDK 21）
+./gradlew build -Pminecraft_version=1.21.11 -Pjava_version=21 \
+  -Ploader_version=0.20.1 -Pfabric_version=0.141.6+1.21.11 \
+  -Pcloth_config_version=21.11.153+fabric -Pmodmenu_version=17.0.1
 ```
 
 架构约定、状态机图和扩展指南见 [AGENTS.md](AGENTS.md)。
