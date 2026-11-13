@@ -60,13 +60,14 @@ dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-    implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    // modImplementation 让 Loom 重映射 mod jar（1.21.11 使用 intermediary 命名）。
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
     // Cloth Config API (26.2)
-    implementation "maven.modrinth:cloth-config:${project.cloth_config_version}"
+    modImplementation "maven.modrinth:cloth-config:${project.cloth_config_version}"
 
     // Mod Menu (optional but recommended)
-    implementation "maven.modrinth:modmenu:${project.modmenu_version}"
+    modImplementation "maven.modrinth:modmenu:${project.modmenu_version}"
 
     // 单元测试
     testImplementation platform("org.junit:junit-bom:5.11.4")
