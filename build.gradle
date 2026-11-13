@@ -64,9 +64,9 @@ repositories {
 dependencies {
     // To change the versions see the gradle.properties file
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
     if (minecraftVersion == "26.2") {
+        implementation "net.fabricmc:fabric-loader:${project.loader_version}"
         // 26.2 的 mod jar 已是 official 命名，直接当普通依赖即可。
         implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
         implementation "maven.modrinth:cloth-config:${project.cloth_config_version}"
@@ -74,7 +74,9 @@ dependencies {
     } else {
         // 1.21.11 走经典重映射路径，显式使用 Mojang 官方命名。
         mappings loom.officialMojangMappings()
-        // modImplementation 让 Loom 把 intermediary 的 mod jar 重映射到当前命名空间。
+        // modImplementation 让 Loom 把 intermediary 的 mod jar 重映射到当前命名空间，
+        // 同时把 Loader 的 Mixin 等运行库带进编译类路径。
+        modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
         modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
         modImplementation "maven.modrinth:cloth-config:${project.cloth_config_version}"
         modImplementation "maven.modrinth:modmenu:${project.modmenu_version}"

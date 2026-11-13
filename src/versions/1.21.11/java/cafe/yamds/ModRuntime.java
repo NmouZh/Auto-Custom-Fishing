@@ -126,9 +126,9 @@ public final class ModRuntime {
         }
 
         if (client.player != null) {
-            client.player.sendSystemMessage(Component.literal(
+            client.player.displayClientMessage(Component.literal(
                     config.modEnabled ? "§a[Auto Fishing] Enabled" : "§c[Auto Fishing] Disabled"
-            ));
+            ), false);
         }
         AutoFishingMod.LOGGER.info("Auto Fishing: {}", config.modEnabled ? "ON" : "OFF");
     }
