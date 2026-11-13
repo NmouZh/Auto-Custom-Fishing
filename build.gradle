@@ -1,7 +1,13 @@
 plugins {
-    id 'net.fabricmc.fabric-loom' version '1.17-SNAPSHOT'
+    id 'net.fabricmc.fabric-loom' version '1.17-SNAPSHOT' apply false
+    id 'net.fabricmc.fabric-loom-remap' version '1.17-SNAPSHOT' apply false
     id 'maven-publish'
 }
+
+// 26.2 运行时使用 official 命名，用 no-remap 插件；
+// 1.21.11 仍是 intermediary，用带重映射的旧插件。
+def minecraftVersion = project.findProperty("minecraft_version").toString()
+apply plugin: (minecraftVersion == "26.2" ? 'net.fabricmc.fabric-loom' : 'net.fabricmc.fabric-loom-remap')
 
 version = "${project.mod_version}-fabric-${project.minecraft_version}"
 group = project.maven_group
@@ -60,14 +66,19 @@ dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     implementation "net.fabricmc:fabric-loader:${project.loader_version}"
 
-    // modImplementation 让 Loom 重映射 mod jar（1.21.11 使用 intermediary 命名）。
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-
-    // Cloth Config API (26.2)
-    modImplementation "maven.modrinth:cloth-config:${project.cloth_config_version}"
-
-    // Mod Menu (optional but recommended)
-    modImplementation "maven.modrinth:modmenu:${project.modmenu_version}"
+    if (minecraftVersion == "26.2") {
+        // 26.2 的 mod jar 已是 official 命名，直接当普通依赖即可。
+        implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+        implementation "maven.modrinth:cloth-config:${project.cloth_config_version}"
+        implementation "maven.modrinth:modmenu:${project.modmenu_version}"
+    } else {
+        // 1.21.11 走经典重映射路径，显式使用 Mojang 官方命名。
+        mappings loom.officialMojangMappings()
+        // modImplementation 让 Loom 把 intermediary 的 mod jar 重映射到当前命名空间。
+        modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+        modImplementation "maven.modrinth:cloth-config:${project.cloth_config_version}"
+        modImplementation "maven.modrinth:modmenu:${project.modmenu_version}"
+    }
 
     // 单元测试
     testImplementation platform("org.junit:junit-bom:5.11.4")
